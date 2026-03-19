@@ -1,8 +1,9 @@
+FROM ghcr.io/foundry-rs/foundry:stable AS foundry
+
 FROM node:22-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV FOUNDRY_DIR=/opt/foundry
-ENV PATH="/root/.nargo/bin:/opt/foundry/bin:/usr/local/bin:${PATH}"
+ENV PATH="/root/.nargo/bin:/usr/local/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   bash \
@@ -18,6 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY --from=foundry /usr/local/bin/forge /usr/local/bin/forge
+COPY --from=foundry /usr/local/bin/cast /usr/local/bin/cast
+COPY --from=foundry /usr/local/bin/anvil /usr/local/bin/anvil
+COPY --from=foundry /usr/local/bin/chisel /usr/local/bin/chisel
+
 COPY package.json package-lock.json ./
 COPY apps/polymarket-signals/package.json ./apps/polymarket-signals/package.json
 RUN npm ci
@@ -28,9 +34,6 @@ RUN curl -fsSL https://raw.githubusercontent.com/noir-lang/noirup/main/install |
   && /root/.nargo/bin/noirup --version 1.0.0-beta.6
 
 RUN bash /app/scripts/docker/install-bb.sh 0.84.0
-
-RUN curl -fsSL https://foundry.paradigm.xyz | bash \
-  && /root/.foundry/bin/foundryup --install stable
 
 RUN chmod +x /app/scripts/docker/install-bb.sh /app/scripts/polymarket-signals/start-runtime.sh
 
