@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#020817"/>
+  <rect width="1200" height="630" fill="url(#vignette)" opacity=".42"/>
+  <rect x="0" y="0" width="1200" height="2" fill="#13243B"/>
+
+  <g transform="translate(84 72)">
+    <circle cx="12" cy="12" r="8" fill="#28D98A"/>
+    <text x="32" y="20" fill="#2FEA93" font-family="Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="1.2">LIVE PREDICTIONS</text>
+
+    <text x="0" y="116" fill="#E6EDF5" font-family="Arial, sans-serif" font-size="86" font-weight="700">Verified Directional Signals</text>
+    <text x="0" y="204" fill="#22C6F3" font-family="Arial, sans-serif" font-size="86" font-weight="700">for Polymarket</text>
+
+    <text x="0" y="292" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="34" font-weight="500">
+      Premium predictions committed before market resolution, revealed after, and
+    </text>
+    <text x="0" y="348" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="34" font-weight="500">
+      cryptographically verified with
+      <tspan fill="#22C6F3" font-weight="700"> zkVerify </tspan>
+      proofs. Every signal is provably
+    </text>
+    <text x="0" y="404" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="34" font-weight="500">honest.</text>
+
+    <g transform="translate(0 430)">
+      <rect width="302" height="68" rx="12" fill="#2FB9DA"/>
+      <path d="M72 37H78L84 22L92 46L100 29L106 37H114" stroke="#03121C" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="132" y="44" fill="#04131C" font-family="Arial, sans-serif" font-size="26" font-weight="700" text-anchor="middle">Browse Live Signals</text>
+    </g>
+
+    <g transform="translate(326 430)">
+      <rect width="286" height="68" rx="12" fill="#040B18" stroke="#1C2840" stroke-width="2"/>
+      <path d="M70 46V24M80 46V30M90 46V18M100 46V36M64 46H106" stroke="#D6D9E1" stroke-width="3.5" stroke-linecap="round"/>
+      <text x="174" y="44" fill="#DDE1E8" font-family="Arial, sans-serif" font-size="25" font-weight="600" text-anchor="middle">See Track Record</text>
+    </g>
+
+    <g transform="translate(688 430)">
+      <g transform="translate(0 15)">
+        <rect x="0" y="2" width="20" height="18" rx="3" stroke="#E0E2E8" stroke-width="3"/>
+        <path d="M14 2V-2C14 -6 11 -9 7 -9H6C2 -9 -1 -6 -1 -2V2" stroke="#E0E2E8" stroke-width="3" stroke-linecap="round"/>
+        <path d="M6 10H13" stroke="#E0E2E8" stroke-width="3" stroke-linecap="round"/>
+      </g>
+      <text x="44" y="44" fill="#E0E2E8" font-family="Arial, sans-serif" font-size="25" font-weight="600">Connect Account</text>
+    </g>
+
+    <line x1="0" y1="518" x2="1032" y2="518" stroke="#172335" stroke-width="2"/>
+
+    <g transform="translate(0 546)">
+      <g>
+        <path d="M16 7L8 10V18C8 25 13 30 20 33C27 30 32 25 32 18V10L24 7" stroke="#22C6F3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M16 20L19 23L25 16" stroke="#22C6F3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="46" y="10" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="24">zkVerify proven</text>
+        <text x="46" y="44" fill="#E6EDF5" font-family="Arial, sans-serif" font-size="28" font-weight="700">247 signals</text>
+      </g>
+
+      <g transform="translate(314 0)">
+        <path d="M0 28L10 18L20 28L34 14" stroke="#28D98A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M27 14H34V21" stroke="#28D98A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="48" y="10" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="24">Win rate</text>
+        <text x="48" y="44" fill="#E6EDF5" font-family="Arial, sans-serif" font-size="28" font-weight="700">62.3%</text>
+      </g>
+
+      <g transform="translate(602 0)">
+        <rect x="4" y="18" width="22" height="16" rx="3" stroke="#F0C419" stroke-width="3"/>
+        <path d="M9 18V12C9 7 12 4 15 4C18 4 21 7 21 12V18" stroke="#F0C419" stroke-width="3" stroke-linecap="round"/>
+        <text x="44" y="10" fill="#7F8DAA" font-family="Arial, sans-serif" font-size="24">Commit-reveal</text>
+        <text x="44" y="44" fill="#E6EDF5" font-family="Arial, sans-serif" font-size="28" font-weight="700">Tamperproof</text>
+      </g>
+    </g>
+  </g>
+
+  <defs>
+    <radialGradient id="vignette" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(84 26) rotate(26.58) scale(1332.47 996.383)">
+      <stop stop-color="#0F3B61"/>
+      <stop offset=".55" stop-color="#02101F" stop-opacity=".35"/>
+      <stop offset="1" stop-color="#020817" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+</svg>

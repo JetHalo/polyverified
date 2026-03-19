@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 7%;
+    --foreground: 210 20% 92%;
+
+    --card: 220 18% 10%;
+    --card-foreground: 210 20% 92%;
+
+    --popover: 220 18% 10%;
+    --popover-foreground: 210 20% 92%;
+
+    --primary: 190 85% 52%;
+    --primary-foreground: 220 20% 7%;
+
+    --secondary: 220 16% 16%;
+    --secondary-foreground: 210 20% 85%;
+
+    --muted: 220 14% 14%;
+    --muted-foreground: 215 15% 55%;
+
+    --accent: 220 16% 18%;
+    --accent-foreground: 210 20% 92%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 190 85% 52%;
+
+    --radius: 0.5rem;
+
+    --signal-up: 145 65% 48%;
+    --signal-down: 0 72% 55%;
+    --signal-verified: 190 85% 52%;
+    --signal-pending: 45 80% 55%;
+
+    --surface-elevated: 220 16% 12%;
+
+    --sidebar-background: 220 20% 6%;
+    --sidebar-foreground: 210 20% 75%;
+    --sidebar-primary: 190 85% 52%;
+    --sidebar-primary-foreground: 220 20% 7%;
+    --sidebar-accent: 220 16% 14%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 220 14% 15%;
+    --sidebar-ring: 190 85% 52%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
+
+@layer utilities {
+  .text-signal-up {
+    color: hsl(var(--signal-up));
+  }
+  .text-signal-down {
+    color: hsl(var(--signal-down));
+  }
+  .text-signal-verified {
+    color: hsl(var(--signal-verified));
+  }
+  .text-signal-pending {
+    color: hsl(var(--signal-pending));
+  }
+  .bg-signal-up {
+    background-color: hsl(var(--signal-up));
+  }
+  .bg-signal-down {
+    background-color: hsl(var(--signal-down));
+  }
+  .bg-signal-verified {
+    background-color: hsl(var(--signal-verified));
+  }
+  .bg-signal-pending {
+    background-color: hsl(var(--signal-pending));
+  }
+  .bg-surface-elevated {
+    background-color: hsl(var(--surface-elevated));
+  }
+  .border-signal-up {
+    border-color: hsl(var(--signal-up));
+  }
+  .border-signal-down {
+    border-color: hsl(var(--signal-down));
+  }
+  .border-signal-verified {
+    border-color: hsl(var(--signal-verified));
+  }
+  .glow-verified {
+    box-shadow: 0 0 20px hsl(var(--signal-verified) / 0.15);
+  }
+  .glow-up {
+    box-shadow: 0 0 12px hsl(var(--signal-up) / 0.12);
+  }
+  .glow-down {
+    box-shadow: 0 0 12px hsl(var(--signal-down) / 0.12);
+  }
+}

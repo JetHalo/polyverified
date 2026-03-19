@@ -1,0 +1,31 @@
+{
+  "name": "zk-x402",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20 <26",
+    "npm": ">=10 <12"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @x402/polymarket-signals",
+    "build": "npm run build -w @x402/polymarket-signals",
+    "contracts:build": "cd contracts && forge build",
+    "contracts:test": "cd contracts && forge test --offline",
+    "anchor:check": "bash contracts/script/check-anchor.sh",
+    "anchor:test": "bash contracts/script/test-anchor.sh",
+    "anchor:deploy": "bash contracts/script/deploy-anchor.sh",
+    "usdz:deploy": "bash contracts/script/deploy-usdz.sh",
+    "anchor:backfill-missing": "npm run anchor:backfill-missing -w @x402/polymarket-signals",
+    "anchor:backfill-times": "npm run anchor:backfill-times -w @x402/polymarket-signals",
+    "lint": "npm run lint -w @x402/polymarket-signals",
+    "test": "npm run test -w @x402/polymarket-signals",
+    "db:init": "npm run db:init -w @x402/polymarket-signals",
+    "db:reset": "npm run db:reset -w @x402/polymarket-signals",
+    "tick": "npm run tick -w @x402/polymarket-signals",
+    "tick:watch": "npm run tick:watch -w @x402/polymarket-signals",
+    "zk:prove-signal": "npm run zk:prove-signal -w @x402/polymarket-signals"
+  }
+}

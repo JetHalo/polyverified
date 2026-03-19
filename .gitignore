@@ -1,0 +1,30 @@
+node_modules
+.next
+out
+dist
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.git-backup
+**/.git-backup
+**/target/witness-*.gz
+contracts/cache/
+
+# Keep PRD local-only when needed
+docs/prd-*.md
+
+# Local docs and tests should not be uploaded
+docs/
+apps/polymarket-signals/src/test/
+apps/polymarket-signals/vitest.config.ts
+contracts/test/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/__tests__/
+
+# Workspace temp
+.worktrees/

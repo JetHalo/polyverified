@@ -1,0 +1,7 @@
+[package]
+name = "polymarket_commitment_hash"
+type = "bin"
+authors = ["OpenAI Codex"]
+compiler_version = ">=1.0.0"
+
+[dependencies]

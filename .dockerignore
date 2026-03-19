@@ -1,0 +1,11 @@
+node_modules
+.next
+.turbo
+.git
+.DS_Store
+*.log
+coverage
+dist
+tmp
+.env
+apps/polymarket-signals/.env

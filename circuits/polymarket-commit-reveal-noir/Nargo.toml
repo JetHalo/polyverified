@@ -1,0 +1,7 @@
+[package]
+name = "polymarket_commit_reveal"
+type = "bin"
+authors = ["OpenAI Codex"]
+compiler_version = ">=1.0.0"
+
+[dependencies]
