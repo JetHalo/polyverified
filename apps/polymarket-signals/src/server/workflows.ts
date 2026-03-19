@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 
 import { anchorSignalCommitment } from "@/server/anchor/client";
 import { listAgents } from "@/server/agents";
+import { fetchBinanceKlines } from "@/server/binance/client";
 import { findExistingSignalIdForMarket, getSignalById, listDueSignalsNeedingReveal, listRunnableMarketSnapshots, listSignalsNeedingAnchor, upsertAgentsCatalog, upsertMarketSnapshots } from "@/server/db/repository";
 import { fetchGammaMarketById, fetchSupportedGammaMarkets } from "@/server/polymarket/client";
 import { applyDbRevealPackage, applyDbSignalProofResult, getDbSignalCommitmentWitness, getDbSignalRevealRecord, insertDbSignalProposal, upsertDbSignalAnchor } from "@/server/repository/db-store";
@@ -35,6 +36,7 @@ interface RunStoredMarketsWorkflowDependencies {
 interface RevealDueSignalsWorkflowDependencies {
   fetchSupportedMarkets?: typeof fetchSupportedGammaMarkets;
   fetchMarketById?: typeof fetchGammaMarketById;
+  fetchBinanceKlines?: typeof fetchBinanceKlines;
   listDueSignals?: typeof listDueSignalsNeedingReveal;
   upsertMarketSnapshots?: typeof upsertMarketSnapshots;
   findExistingSignalIdForMarket?: typeof findExistingSignalIdForMarket;
@@ -287,6 +289,61 @@ export function deriveResolvedDirection(market: MarketSnapshot, now: Date): Dire
   return null;
 }
 
+function resolveHourlyBinanceSymbol(marketType: MarketSnapshot["marketType"]): "BTCUSDT" | "ETHUSDT" | null {
+  if (marketType === "BTC Hourly") {
+    return "BTCUSDT";
+  }
+
+  if (marketType === "ETH Hourly") {
+    return "ETHUSDT";
+  }
+
+  return null;
+}
+
+async function deriveResolvedDirectionFromOfficialSource(input: {
+  market: MarketSnapshot;
+  now: Date;
+  binanceBaseUrl: string;
+  fetchBinanceKlinesImpl: typeof fetchBinanceKlines;
+}): Promise<Direction | null> {
+  const fallbackDirection = deriveResolvedDirection(input.market, input.now);
+
+  if (fallbackDirection) {
+    return fallbackDirection;
+  }
+
+  if (input.now.getTime() < new Date(input.market.resolvesAt).getTime()) {
+    return null;
+  }
+
+  const symbol = resolveHourlyBinanceSymbol(input.market.marketType);
+
+  if (!symbol) {
+    return null;
+  }
+
+  const resolveMs = new Date(input.market.resolvesAt).getTime();
+  const cycleStartMs = resolveMs - 60 * 60 * 1000;
+
+  const candles = await input.fetchBinanceKlinesImpl({
+    baseUrl: input.binanceBaseUrl,
+    symbol,
+    interval: "1h",
+    limit: 3,
+    now: input.now,
+  });
+
+  const candle = candles.find((candidate) => candidate.openTime === cycleStartMs)
+    ?? candles.find((candidate) => candidate.openTime <= cycleStartMs && candidate.closeTime >= resolveMs - 1);
+
+  if (!candle) {
+    return null;
+  }
+
+  return candle.close >= candle.open ? "Up" : "Down";
+}
+
 export async function revealDueSignalsWorkflow(input: {
   db: Queryable;
   config: RuntimeConfig;
@@ -296,6 +353,7 @@ export async function revealDueSignalsWorkflow(input: {
   const findExisting = input.findExistingSignalIdForMarket ?? findExistingSignalIdForMarket;
   const fetchMarkets = input.fetchSupportedMarkets ?? fetchSupportedGammaMarkets;
   const fetchMarketById = input.fetchMarketById ?? fetchGammaMarketById;
+  const fetchBinanceKlinesImpl = input.fetchBinanceKlines ?? fetchBinanceKlines;
   const loadDueSignals = input.listDueSignals ?? listDueSignalsNeedingReveal;
   const persistMarkets = input.upsertMarketSnapshots ?? upsertMarketSnapshots;
   const persistReveal = input.applyRevealPackage ?? applyDbRevealPackage;
@@ -334,7 +392,12 @@ export async function revealDueSignalsWorkflow(input: {
       continue;
     }
 
-    const finalDirection = deriveResolvedDirection(market, input.now);
+    const finalDirection = await deriveResolvedDirectionFromOfficialSource({
+      market,
+      now: input.now,
+      binanceBaseUrl: input.config.strategy.binance.baseUrl,
+      fetchBinanceKlinesImpl,
+    });
 
     if (!finalDirection) {
       skipped.push({ signalId: signal.signalId, reason: "market_not_resolved" });

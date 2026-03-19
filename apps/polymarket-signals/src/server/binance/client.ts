@@ -18,7 +18,7 @@ export type BinanceKlineRow = [
 export interface FetchBinanceKlinesInput {
   baseUrl: string;
   symbol: "BTCUSDT" | "ETHUSDT";
-  interval: "1m" | "5m";
+  interval: "1m" | "5m" | "1h";
   limit: number;
   now?: Date;
   fetchImpl?: typeof fetch;
