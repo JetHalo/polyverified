@@ -260,6 +260,7 @@ export async function runStoredMarketsWorkflow(input: {
   const persistProposal = input.insertSignalProposal ?? insertDbSignalProposal;
   const persistSignalAnchor = input.persistSignalAnchor ?? upsertDbSignalAnchor;
   const runAgent = input.runSignalAgent ?? runSignalAgent;
+  const anchorCommitment = input.anchorSignalCommitment ?? anchorSignalCommitment;
 
   await persistAgents(
     input.db,
@@ -288,21 +289,36 @@ export async function runStoredMarketsWorkflow(input: {
     await persistProposal(input.db, proposal);
 
     if (input.config.anchor.enabled) {
-      await persistSignalAnchor(
-        input.db,
-        {
-          signalId: proposal.signal.signalId,
-          commitment: proposal.signal.commitment,
-          anchorStatus: "pending",
-          anchorTxHash: null,
-          anchorExplorerUrl: null,
-          anchorChainId: input.config.anchor.chainId,
-          anchorNetwork: input.config.anchor.network,
-          anchorContractAddress: input.config.anchor.contractAddress,
-          anchoredAt: null,
-        },
-        proposal.signal.commitmentHashMode,
-      );
+      try {
+        const anchorRecord = await anchorCommitment({
+          config: input.config,
+          signal: proposal.signal,
+          payload: proposal.payload,
+          existingAnchorTxHash: null,
+        });
+
+        await persistSignalAnchor(
+          input.db,
+          anchorRecord,
+          proposal.signal.commitmentHashMode,
+        );
+      } catch {
+        await persistSignalAnchor(
+          input.db,
+          {
+            signalId: proposal.signal.signalId,
+            commitment: proposal.signal.commitment,
+            anchorStatus: "pending",
+            anchorTxHash: null,
+            anchorExplorerUrl: null,
+            anchorChainId: input.config.anchor.chainId,
+            anchorNetwork: input.config.anchor.network,
+            anchorContractAddress: input.config.anchor.contractAddress,
+            anchoredAt: null,
+          },
+          proposal.signal.commitmentHashMode,
+        );
+      }
     }
 
     proposals.push(proposal);
