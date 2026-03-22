@@ -10,3 +10,12 @@ export function resolveTickWatchIntervalMs(value) {
 
   return numeric;
 }
+
+export function resolveAnchorWatchEnabled(value) {
+  if (value == null || String(value).trim() === "") {
+    return false;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "true" || normalized === "1";
+}

@@ -4,6 +4,8 @@ export type Direction = "Up" | "Down";
 export type SignalProofState = "committed" | "revealed" | "verified" | "failed";
 export type CommitmentHashMode = "sha256-decimal-v1" | "poseidon2-field-v1";
 export type CommitmentAnchorStatus = "pending" | "anchored" | "failed";
+export type BinanceSymbol = "BTCUSDT" | "ETHUSDT";
+export type BinanceCandleInterval = "1m" | "5m" | "1h";
 
 export interface PaymentConfig {
   mode: "single-signal";
@@ -17,6 +19,8 @@ export interface PaymentConfig {
   eip712Version: string | null;
   facilitatorUrl: string;
   treasuryAddress: string;
+  rpcUrl?: string;
+  signerPrivateKey?: string;
 }
 
 export interface SignalTimingPolicy {
@@ -148,6 +152,22 @@ export interface MarketObservation {
   liquidityUsd: number;
 }
 
+export interface BinanceCandleRecord {
+  symbol: BinanceSymbol;
+  interval: BinanceCandleInterval;
+  openTime: string;
+  closeTime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  quoteVolume: number;
+  trades: number;
+  takerBuyBaseVolume: number;
+  takerBuyQuoteVolume: number;
+}
+
 export interface SignalRecord {
   signalId: string;
   agentSlug: AgentSlug;
@@ -161,6 +181,10 @@ export interface SignalRecord {
   commitmentHashMode: CommitmentHashMode;
   commitmentStatus: SignalProofState;
   isPremium: boolean;
+  anchorStatus?: CommitmentAnchorStatus | null;
+  anchorTxHash?: string | null;
+  anchorExplorerUrl?: string | null;
+  anchoredAt?: string | null;
 }
 
 export interface CommitmentAnchorRecord {

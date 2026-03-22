@@ -10,6 +10,7 @@
     "db:reset": "node ../../scripts/polymarket-signals/reset-db.mjs",
     "anchor:backfill-missing": "node ../../scripts/polymarket-signals/backfill-missing-anchors.mjs",
     "anchor:backfill-times": "node ../../scripts/polymarket-signals/backfill-anchor-times.mjs",
+    "anchor:watch": "node ../../scripts/polymarket-signals/anchor-watch.mjs",
     "tick": "node ../../scripts/polymarket-signals/run-tick.mjs",
     "tick:watch": "node ../../scripts/polymarket-signals/tick-watch.mjs",
     "zk:prove-signal": "node ../../scripts/polymarket-signals/prove-signal.mjs",

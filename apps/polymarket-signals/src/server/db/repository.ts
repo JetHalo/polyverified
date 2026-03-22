@@ -1,12 +1,14 @@
 import type { Pool, QueryResult } from "pg";
 
-import type { MarketObservation, MarketSnapshot, SignalProofState, SignalRecord } from "@/server/types";
+import type { StrategyCandle } from "@/server/strategy/indicators";
+import type { BinanceCandleInterval, BinanceSymbol, MarketObservation, MarketSnapshot, SignalProofState, SignalRecord } from "@/server/types";
 
 type Queryable = Pick<Pool, "query">;
 
 function mapSignalRow(row: any): SignalRecord {
   const predictedAt = row.predicted_at ?? row.predictedAt;
   const resolvesAt = row.resolves_at ?? row.resolvesAt;
+  const anchoredAt = row.anchored_at ?? row.anchoredAt;
 
   return {
     signalId: row.signal_id ?? row.signalId,
@@ -21,6 +23,10 @@ function mapSignalRow(row: any): SignalRecord {
     commitmentHashMode: row.commitment_hash_mode ?? row.commitmentHashMode ?? "poseidon2-field-v1",
     commitmentStatus: row.commitment_status ?? row.commitmentStatus,
     isPremium: row.is_premium ?? row.isPremium,
+    anchorStatus: row.anchor_status ?? row.anchorStatus ?? null,
+    anchorTxHash: row.anchor_tx_hash ?? row.anchorTxHash ?? null,
+    anchorExplorerUrl: row.anchor_explorer_url ?? row.anchorExplorerUrl ?? null,
+    anchoredAt: anchoredAt ? new Date(anchoredAt).toISOString() : null,
   };
 }
 
@@ -176,7 +182,8 @@ export async function listRunnableMarketSnapshots(db: Queryable, now: Date): Pro
   return result.rows.map(mapMarketRow);
 }
 
-export async function listSignalsNeedingAnchor(db: Queryable): Promise<SignalRecord[]> {
+export async function listSignalsNeedingAnchor(db: Queryable, now: Date): Promise<SignalRecord[]> {
+  const recentAnchorRetryCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const result: QueryResult = await db.query(
     `
       select
@@ -191,13 +198,23 @@ export async function listSignalsNeedingAnchor(db: Queryable): Promise<SignalRec
         s.commitment,
         s.commitment_hash_mode,
         s.commitment_status,
-        s.is_premium
+        s.is_premium,
+        sa.anchor_status,
+        sa.anchor_tx_hash,
+        sa.anchor_explorer_url,
+        sa.anchored_at
       from signals s
       left join signal_anchors sa on sa.signal_id = s.signal_id
-      where s.commitment_status in ('committed', 'revealed')
-        and (sa.signal_id is null or sa.anchor_status = 'pending')
-      order by s.predicted_at asc
+      where (sa.signal_id is null or sa.anchor_status = 'pending')
+        and (
+          (s.commitment_status = 'committed' and s.resolves_at > $1)
+          or s.predicted_at >= $2
+        )
+      order by
+        case when s.commitment_status = 'committed' and s.resolves_at > $1 then 0 else 1 end,
+        s.predicted_at asc
     `,
+    [now.toISOString(), recentAnchorRetryCutoff.toISOString()],
   );
 
   return result.rows.map(mapSignalRow);
@@ -225,6 +242,33 @@ export async function listDueSignalsNeedingReveal(db: Queryable, now: Date): Pro
       order by resolves_at asc
     `,
     [now.toISOString()],
+  );
+
+  return result.rows.map(mapSignalRow);
+}
+
+export async function listSignalsNeedingProof(db: Queryable): Promise<SignalRecord[]> {
+  const result: QueryResult = await db.query(
+    `
+      select
+        s.signal_id,
+        s.agent_slug,
+        s.market_id,
+        s.market_type,
+        s.direction,
+        s.entry_price_cents,
+        s.predicted_at,
+        s.resolves_at,
+        s.commitment,
+        s.commitment_hash_mode,
+        s.commitment_status,
+        s.is_premium
+      from signals s
+      inner join signal_reveals sr on sr.signal_id = s.signal_id
+      where s.commitment_status = 'revealed'
+        and sr.proof_state = 'revealed'
+      order by sr.revealed_at desc
+    `,
   );
 
   return result.rows.map(mapSignalRow);
@@ -339,4 +383,119 @@ export async function listMarketObservations(
   );
 
   return result.rows.map(mapMarketObservationRow);
+}
+
+export async function upsertBinanceCandles(
+  db: Queryable,
+  input: {
+    symbol: BinanceSymbol;
+    interval: BinanceCandleInterval;
+    candles: StrategyCandle[];
+  },
+): Promise<void> {
+  for (const candle of input.candles) {
+    await db.query(
+      `
+        insert into binance_candles (
+          symbol,
+          interval,
+          open_time,
+          close_time,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          quote_volume,
+          trades,
+          taker_buy_base_volume,
+          taker_buy_quote_volume,
+          updated_at
+        ) values (
+          $1, $2, to_timestamp($3 / 1000.0), to_timestamp($4 / 1000.0), $5, $6, $7, $8, $9, $10, $11, $12, $13, now()
+        )
+        on conflict (symbol, interval, open_time) do update set
+          close_time = excluded.close_time,
+          open = excluded.open,
+          high = excluded.high,
+          low = excluded.low,
+          close = excluded.close,
+          volume = excluded.volume,
+          quote_volume = excluded.quote_volume,
+          trades = excluded.trades,
+          taker_buy_base_volume = excluded.taker_buy_base_volume,
+          taker_buy_quote_volume = excluded.taker_buy_quote_volume,
+          updated_at = now()
+      `,
+      [
+        input.symbol,
+        input.interval,
+        candle.openTime,
+        candle.closeTime,
+        candle.open,
+        candle.high,
+        candle.low,
+        candle.close,
+        candle.volume,
+        candle.quoteVolume,
+        candle.trades,
+        candle.takerBuyBaseVolume,
+        candle.takerBuyQuoteVolume,
+      ],
+    );
+  }
+}
+
+function mapBinanceCandleRow(row: any): StrategyCandle {
+  return {
+    openTime: new Date(row.open_time ?? row.openTime).getTime(),
+    closeTime: new Date(row.close_time ?? row.closeTime).getTime(),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume),
+    quoteVolume: Number(row.quote_volume ?? row.quoteVolume),
+    trades: row.trades,
+    takerBuyBaseVolume: Number(row.taker_buy_base_volume ?? row.takerBuyBaseVolume),
+    takerBuyQuoteVolume: Number(row.taker_buy_quote_volume ?? row.takerBuyQuoteVolume),
+  };
+}
+
+export async function listStoredBinanceCandles(
+  db: Queryable,
+  input: {
+    symbol: BinanceSymbol;
+    interval: BinanceCandleInterval;
+    from: Date;
+    to: Date;
+  },
+): Promise<StrategyCandle[]> {
+  const result: QueryResult = await db.query(
+    `
+      select
+        symbol,
+        interval,
+        open_time,
+        close_time,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        quote_volume,
+        trades,
+        taker_buy_base_volume,
+        taker_buy_quote_volume
+      from binance_candles
+      where symbol = $1
+        and interval = $2
+        and open_time >= $3
+        and open_time <= $4
+      order by open_time asc
+    `,
+    [input.symbol, input.interval, input.from.toISOString(), input.to.toISOString()],
+  );
+
+  return result.rows.map(mapBinanceCandleRow);
 }

@@ -109,6 +109,24 @@ async function loadReceipt(input: {
   throw lastError instanceof Error ? lastError : new Error("Failed to fetch anchor receipt");
 }
 
+function buildPendingAnchorRecord(input: {
+  config: RuntimeConfig;
+  signal: SignalRecord;
+  txHash: string;
+}): CommitmentAnchorRecord {
+  return {
+    signalId: input.signal.signalId,
+    commitment: input.signal.commitment,
+    anchorStatus: "pending",
+    anchorTxHash: input.txHash,
+    anchorExplorerUrl: `${input.config.anchor.explorerBaseUrl}${input.txHash}`,
+    anchorChainId: input.config.anchor.chainId,
+    anchorNetwork: input.config.anchor.network,
+    anchorContractAddress: input.config.anchor.contractAddress,
+    anchoredAt: null,
+  };
+}
+
 export function decimalScalarToBytes32Hex(value: string): string {
   if (!/^\d+$/.test(value)) {
     throw new Error("Decimal scalar must contain only digits");
@@ -122,6 +140,7 @@ export async function anchorSignalCommitment(input: {
   config: RuntimeConfig;
   signal: SignalRecord;
   payload: CommitmentPayload;
+  existingAnchorTxHash?: string | null;
   runCommand?: RunCommand;
 }): Promise<CommitmentAnchorRecord> {
   const contractAddress = input.config.anchor.contractAddress;
@@ -141,6 +160,33 @@ export async function anchorSignalCommitment(input: {
   }
 
   const runCommand = input.runCommand ?? defaultRunCommand;
+  const existingAnchorTxHash = input.existingAnchorTxHash?.trim() || null;
+
+  if (existingAnchorTxHash) {
+    const receipt = await loadReceipt({
+      runCommand,
+      txHash: existingAnchorTxHash,
+      rpcUrl,
+    });
+    const status = parseReceiptStatus(receipt.status);
+
+    if (status !== 1) {
+      throw new Error(`Anchor transaction failed: ${JSON.stringify(receipt) || "unknown error"}`);
+    }
+
+    return {
+      signalId: input.signal.signalId,
+      commitment: input.signal.commitment,
+      anchorStatus: "anchored",
+      anchorTxHash: existingAnchorTxHash,
+      anchorExplorerUrl: `${input.config.anchor.explorerBaseUrl}${existingAnchorTxHash}`,
+      anchorChainId: input.config.anchor.chainId,
+      anchorNetwork: input.config.anchor.network,
+      anchorContractAddress: contractAddress,
+      anchoredAt: parseAnchoredAt(receipt.blockTimestamp),
+    };
+  }
+
   const commitmentHex = decimalScalarToBytes32Hex(input.signal.commitment);
   const signalIdHashHex = decimalScalarToBytes32Hex(input.payload.signalIdHash);
   const predictedAtUnix = String(input.payload.predictedAtUnix);
@@ -157,29 +203,13 @@ export async function anchorSignalCommitment(input: {
     rpcUrl,
     "--private-key",
     normalizedPrivateKey,
+    "--async",
   ]);
 
   const txHash = parseTxHash(sendResult.stdout);
-  const receipt = await loadReceipt({
-    runCommand,
+  return buildPendingAnchorRecord({
+    config: input.config,
+    signal: input.signal,
     txHash,
-    rpcUrl,
   });
-  const status = parseReceiptStatus(receipt.status);
-
-  if (status !== 1) {
-    throw new Error(`Anchor transaction failed: ${JSON.stringify(receipt) || "unknown error"}`);
-  }
-
-  return {
-    signalId: input.signal.signalId,
-    commitment: input.signal.commitment,
-    anchorStatus: "anchored",
-    anchorTxHash: txHash,
-    anchorExplorerUrl: `${input.config.anchor.explorerBaseUrl}${txHash}`,
-    anchorChainId: input.config.anchor.chainId,
-    anchorNetwork: input.config.anchor.network,
-    anchorContractAddress: contractAddress,
-    anchoredAt: parseAnchoredAt(receipt.blockTimestamp),
-  };
 }

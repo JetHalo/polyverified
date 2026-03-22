@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { anchorSignalCommitment } from "@/server/anchor/client";
 import { listAgents } from "@/server/agents";
 import { fetchBinanceKlines } from "@/server/binance/client";
-import { findExistingSignalIdForMarket, getSignalById, listDueSignalsNeedingReveal, listRunnableMarketSnapshots, listSignalsNeedingAnchor, upsertAgentsCatalog, upsertMarketSnapshots } from "@/server/db/repository";
+import { findExistingSignalIdForMarket, getSignalById, listDueSignalsNeedingReveal, listRunnableMarketSnapshots, listSignalsNeedingAnchor, listSignalsNeedingProof, listStoredBinanceCandles, upsertAgentsCatalog, upsertBinanceCandles, upsertMarketSnapshots } from "@/server/db/repository";
 import { fetchGammaMarketById, fetchSupportedGammaMarkets } from "@/server/polymarket/client";
 import { applyDbRevealPackage, applyDbSignalProofResult, getDbSignalCommitmentWitness, getDbSignalRevealRecord, insertDbSignalProposal, upsertDbSignalAnchor } from "@/server/repository/db-store";
 import { runSignalAgent } from "@/server/signals/orchestrate";
@@ -12,11 +12,13 @@ import type { FinalizeSignalResult } from "@/server/signals/finalize-signal";
 import type { SignalProposal } from "@/server/signals/create-signal";
 import type { CommitmentPayload } from "@/server/zk/commitment";
 import { proveAndSubmitSignalReveal } from "@/server/zk/prove-and-submit";
-import type { Direction, MarketSnapshot, RuntimeConfig, SignalRecord } from "@/server/types";
+import type { Direction, BinanceCandleInterval, BinanceSymbol, MarketSnapshot, RuntimeConfig, SignalRecord } from "@/server/types";
 
 type Queryable = Pick<Pool, "query">;
 const ANCHOR_RETRY_ATTEMPTS = 3;
 const ANCHOR_RETRY_DELAY_MS = 500;
+const PENDING_ANCHOR_BATCH_SIZE = 2;
+const PENDING_PROOF_BATCH_SIZE = 2;
 
 interface SyncSupportedMarketsWorkflowDependencies {
   fetchSupportedMarkets?: typeof fetchSupportedGammaMarkets;
@@ -37,6 +39,7 @@ interface RevealDueSignalsWorkflowDependencies {
   fetchSupportedMarkets?: typeof fetchSupportedGammaMarkets;
   fetchMarketById?: typeof fetchGammaMarketById;
   fetchBinanceKlines?: typeof fetchBinanceKlines;
+  listStoredBinanceCandles?: typeof listStoredBinanceCandles;
   listDueSignals?: typeof listDueSignalsNeedingReveal;
   upsertMarketSnapshots?: typeof upsertMarketSnapshots;
   findExistingSignalIdForMarket?: typeof findExistingSignalIdForMarket;
@@ -51,6 +54,7 @@ interface RetryPendingAnchorsWorkflowDependencies {
   getSignalCommitmentWitness?: typeof getDbSignalCommitmentWitness;
   persistSignalAnchor?: typeof upsertDbSignalAnchor;
   anchorSignalCommitment?: typeof anchorSignalCommitment;
+  retryPendingAnchorsWorkflow?: typeof retryPendingAnchorsWorkflow;
 }
 
 interface RetrySignalProofWorkflowDependencies {
@@ -61,16 +65,26 @@ interface RetrySignalProofWorkflowDependencies {
   proveAndSubmitSignalReveal?: typeof proveAndSubmitSignalReveal;
 }
 
+interface RetryPendingSignalProofsWorkflowDependencies extends RetrySignalProofWorkflowDependencies {
+  listSignalsNeedingProof?: typeof listSignalsNeedingProof;
+}
+
 interface RunSignalLifecycleTickDependencies
   extends SyncSupportedMarketsWorkflowDependencies,
     RunStoredMarketsWorkflowDependencies,
     RevealDueSignalsWorkflowDependencies,
-    RetryPendingAnchorsWorkflowDependencies {
+    RetryPendingAnchorsWorkflowDependencies,
+    RetryPendingSignalProofsWorkflowDependencies {
+  syncBinanceCandlesWorkflow?: typeof syncBinanceCandlesWorkflow;
+  upsertBinanceCandles?: typeof upsertBinanceCandles;
   syncSupportedMarketsWorkflow?: typeof syncSupportedMarketsWorkflow;
   runStoredMarketsWorkflow?: typeof runStoredMarketsWorkflow;
   retryPendingAnchorsWorkflow?: typeof retryPendingAnchorsWorkflow;
   revealDueSignalsWorkflow?: typeof revealDueSignalsWorkflow;
+  retryPendingSignalProofsWorkflow?: typeof retryPendingSignalProofsWorkflow;
 }
+
+const BINANCE_SETTLEMENT_KLINE_LIMIT = 48;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -97,6 +111,7 @@ async function attemptAnchorWithRetries(input: {
   signal: SignalRecord;
   payload: CommitmentPayload;
   anchorCommitment: typeof anchorSignalCommitment;
+  existingAnchorTxHash?: string | null;
 }) {
   let lastError: unknown = null;
 
@@ -106,6 +121,7 @@ async function attemptAnchorWithRetries(input: {
         config: input.config,
         signal: input.signal,
         payload: input.payload,
+        existingAnchorTxHash: input.existingAnchorTxHash,
       });
     } catch (error) {
       lastError = error;
@@ -120,13 +136,95 @@ async function attemptAnchorWithRetries(input: {
     signalId: input.signal.signalId,
     commitment: input.signal.commitment,
     anchorStatus: "pending" as const,
-    anchorTxHash: null,
-    anchorExplorerUrl: null,
+    anchorTxHash: input.existingAnchorTxHash ?? null,
+    anchorExplorerUrl: input.existingAnchorTxHash
+      ? `${input.config.anchor.explorerBaseUrl}${input.existingAnchorTxHash}`
+      : null,
     anchorChainId: input.config.anchor.chainId,
     anchorNetwork: input.config.anchor.network,
     anchorContractAddress: input.config.anchor.contractAddress,
     anchoredAt: null,
     error: lastError,
+  };
+}
+
+export async function syncBinanceCandlesWorkflow(input: {
+  db: Queryable;
+  config: RuntimeConfig;
+  now: Date;
+  fetchBinanceKlines?: typeof fetchBinanceKlines;
+  upsertBinanceCandles?: typeof upsertBinanceCandles;
+}) {
+  const fetchBinanceKlinesImpl = input.fetchBinanceKlines ?? fetchBinanceKlines;
+  const persistCandles = input.upsertBinanceCandles ?? upsertBinanceCandles;
+  const targets: Array<{ symbol: BinanceSymbol; interval: BinanceCandleInterval; limit: number }> = [
+    {
+      symbol: "BTCUSDT",
+      interval: input.config.strategy.binance.backgroundInterval,
+      limit: input.config.strategy.binance.backgroundKlineLimit,
+    },
+    {
+      symbol: "BTCUSDT",
+      interval: input.config.strategy.binance.triggerInterval,
+      limit: input.config.strategy.binance.triggerKlineLimit,
+    },
+    {
+      symbol: "BTCUSDT",
+      interval: "1h",
+      limit: BINANCE_SETTLEMENT_KLINE_LIMIT,
+    },
+    {
+      symbol: "ETHUSDT",
+      interval: input.config.strategy.binance.backgroundInterval,
+      limit: input.config.strategy.binance.backgroundKlineLimit,
+    },
+    {
+      symbol: "ETHUSDT",
+      interval: input.config.strategy.binance.triggerInterval,
+      limit: input.config.strategy.binance.triggerKlineLimit,
+    },
+    {
+      symbol: "ETHUSDT",
+      interval: "1h",
+      limit: BINANCE_SETTLEMENT_KLINE_LIMIT,
+    },
+  ];
+  const synced: Array<{ symbol: BinanceSymbol; interval: BinanceCandleInterval; candles: number }> = [];
+  const errors: Array<{ symbol: BinanceSymbol; interval: BinanceCandleInterval; error: string }> = [];
+
+  for (const target of targets) {
+    try {
+      const candles = await fetchBinanceKlinesImpl({
+        baseUrl: input.config.strategy.binance.baseUrl,
+        symbol: target.symbol,
+        interval: target.interval,
+        limit: target.limit,
+        now: input.now,
+      });
+
+      await persistCandles(input.db, {
+        symbol: target.symbol,
+        interval: target.interval,
+        candles,
+      });
+
+      synced.push({
+        symbol: target.symbol,
+        interval: target.interval,
+        candles: candles.length,
+      });
+    } catch (error) {
+      errors.push({
+        symbol: target.symbol,
+        interval: target.interval,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    synced,
+    errors,
   };
 }
 
@@ -162,7 +260,6 @@ export async function runStoredMarketsWorkflow(input: {
   const persistProposal = input.insertSignalProposal ?? insertDbSignalProposal;
   const persistSignalAnchor = input.persistSignalAnchor ?? upsertDbSignalAnchor;
   const runAgent = input.runSignalAgent ?? runSignalAgent;
-  const anchorCommitment = input.anchorSignalCommitment ?? anchorSignalCommitment;
 
   await persistAgents(
     input.db,
@@ -178,6 +275,7 @@ export async function runStoredMarketsWorkflow(input: {
 
   for (const market of markets) {
     const proposal = await runAgent({
+      db: input.db,
       market,
       config: input.config,
       now: input.now,
@@ -190,14 +288,21 @@ export async function runStoredMarketsWorkflow(input: {
     await persistProposal(input.db, proposal);
 
     if (input.config.anchor.enabled) {
-      const anchorRecord = await attemptAnchorWithRetries({
-        config: input.config,
-        signal: proposal.signal,
-        payload: proposal.payload,
-        anchorCommitment,
-      });
-
-      await persistSignalAnchor(input.db, anchorRecord, proposal.signal.commitmentHashMode);
+      await persistSignalAnchor(
+        input.db,
+        {
+          signalId: proposal.signal.signalId,
+          commitment: proposal.signal.commitment,
+          anchorStatus: "pending",
+          anchorTxHash: null,
+          anchorExplorerUrl: null,
+          anchorChainId: input.config.anchor.chainId,
+          anchorNetwork: input.config.anchor.network,
+          anchorContractAddress: input.config.anchor.contractAddress,
+          anchoredAt: null,
+        },
+        proposal.signal.commitmentHashMode,
+      );
     }
 
     proposals.push(proposal);
@@ -212,6 +317,7 @@ export async function runStoredMarketsWorkflow(input: {
 export async function retryPendingAnchorsWorkflow(input: {
   db: Queryable;
   config: RuntimeConfig;
+  now: Date;
 } & RetryPendingAnchorsWorkflowDependencies) {
   const loadSignals = input.listSignalsNeedingAnchor ?? listSignalsNeedingAnchor;
   const loadWitness = input.getSignalCommitmentWitness ?? getDbSignalCommitmentWitness;
@@ -222,11 +328,12 @@ export async function retryPendingAnchorsWorkflow(input: {
     return { checked: 0, anchored: 0, pending: 0 };
   }
 
-  const signals = await loadSignals(input.db);
+  const signals = await loadSignals(input.db, input.now);
+  const pendingSignals = signals.slice(0, PENDING_ANCHOR_BATCH_SIZE);
   let anchored = 0;
   let pending = 0;
 
-  for (const signal of signals) {
+  for (const signal of pendingSignals) {
     const witness = await loadWitness(input.db, signal.signalId);
 
     if (!witness) {
@@ -237,8 +344,8 @@ export async function retryPendingAnchorsWorkflow(input: {
           signalId: signal.signalId,
           commitment: signal.commitment,
           anchorStatus: "pending",
-          anchorTxHash: null,
-          anchorExplorerUrl: null,
+          anchorTxHash: signal.anchorTxHash ?? null,
+          anchorExplorerUrl: signal.anchorExplorerUrl ?? null,
           anchorChainId: input.config.anchor.chainId,
           anchorNetwork: input.config.anchor.network,
           anchorContractAddress: input.config.anchor.contractAddress,
@@ -255,6 +362,7 @@ export async function retryPendingAnchorsWorkflow(input: {
       signal,
       payload,
       anchorCommitment,
+      existingAnchorTxHash: signal.anchorTxHash ?? null,
     });
 
     await persistSignalAnchor(input.db, anchorRecord, signal.commitmentHashMode);
@@ -267,7 +375,7 @@ export async function retryPendingAnchorsWorkflow(input: {
   }
 
   return {
-    checked: signals.length,
+    checked: pendingSignals.length,
     anchored,
     pending,
   };
@@ -302,10 +410,12 @@ function resolveHourlyBinanceSymbol(marketType: MarketSnapshot["marketType"]): "
 }
 
 async function deriveResolvedDirectionFromOfficialSource(input: {
+  db: Queryable;
   market: MarketSnapshot;
   now: Date;
   binanceBaseUrl: string;
   fetchBinanceKlinesImpl: typeof fetchBinanceKlines;
+  loadStoredBinanceCandlesImpl: typeof listStoredBinanceCandles;
 }): Promise<Direction | null> {
   const fallbackDirection = deriveResolvedDirection(input.market, input.now);
 
@@ -325,14 +435,21 @@ async function deriveResolvedDirectionFromOfficialSource(input: {
 
   const resolveMs = new Date(input.market.resolvesAt).getTime();
   const cycleStartMs = resolveMs - 60 * 60 * 1000;
-
-  const candles = await input.fetchBinanceKlinesImpl({
-    baseUrl: input.binanceBaseUrl,
+  const storedCandles = await input.loadStoredBinanceCandlesImpl(input.db, {
     symbol,
     interval: "1h",
-    limit: 3,
-    now: input.now,
+    from: new Date(cycleStartMs - (2 * 60 * 60 * 1000)),
+    to: new Date(resolveMs + (60 * 60 * 1000)),
   });
+  const candles = storedCandles.length > 0
+    ? storedCandles
+    : await input.fetchBinanceKlinesImpl({
+        baseUrl: input.binanceBaseUrl,
+        symbol,
+        interval: "1h",
+        limit: BINANCE_SETTLEMENT_KLINE_LIMIT,
+        now: input.now,
+      });
 
   const candle = candles.find((candidate) => candidate.openTime === cycleStartMs)
     ?? candles.find((candidate) => candidate.openTime <= cycleStartMs && candidate.closeTime >= resolveMs - 1);
@@ -354,12 +471,11 @@ export async function revealDueSignalsWorkflow(input: {
   const fetchMarkets = input.fetchSupportedMarkets ?? fetchSupportedGammaMarkets;
   const fetchMarketById = input.fetchMarketById ?? fetchGammaMarketById;
   const fetchBinanceKlinesImpl = input.fetchBinanceKlines ?? fetchBinanceKlines;
+  const loadStoredBinanceCandlesImpl = input.listStoredBinanceCandles ?? listStoredBinanceCandles;
   const loadDueSignals = input.listDueSignals ?? listDueSignalsNeedingReveal;
   const persistMarkets = input.upsertMarketSnapshots ?? upsertMarketSnapshots;
   const persistReveal = input.applyRevealPackage ?? applyDbRevealPackage;
   const toRevealPackage = input.buildRevealPackage ?? buildRevealPackage;
-  const getSignalCommitmentWitness = input.getSignalCommitmentWitness ?? getDbSignalCommitmentWitness;
-  const proveAndSubmitReveal = input.proveAndSubmitSignalReveal ?? proveAndSubmitSignalReveal;
 
   const markets = await fetchMarkets({
     baseUrl: input.baseUrl,
@@ -392,56 +508,35 @@ export async function revealDueSignalsWorkflow(input: {
       continue;
     }
 
-    const finalDirection = await deriveResolvedDirectionFromOfficialSource({
-      market,
-      now: input.now,
-      binanceBaseUrl: input.config.strategy.binance.baseUrl,
-      fetchBinanceKlinesImpl,
-    });
+    let finalDirection: Direction | null;
+
+    try {
+      finalDirection = await deriveResolvedDirectionFromOfficialSource({
+        db: input.db,
+        market,
+        now: input.now,
+        binanceBaseUrl: input.config.strategy.binance.baseUrl,
+        fetchBinanceKlinesImpl,
+        loadStoredBinanceCandlesImpl,
+      });
+    } catch (error) {
+      skipped.push({
+        signalId: signal.signalId,
+        reason: `resolution_source_error:${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
 
     if (!finalDirection) {
       skipped.push({ signalId: signal.signalId, reason: "market_not_resolved" });
       continue;
     }
 
-    const shouldAttemptProof =
-      signal.commitmentHashMode === "poseidon2-field-v1" && Boolean(input.config.zk.rpcUrl && input.config.zk.seedPhrase);
-    let proofId: string | undefined;
-    let txHash: string | undefined;
-    let proofUrl: string | undefined;
-    let proofStatus: "revealed" | "verified" | "failed" | undefined;
-
-    if (shouldAttemptProof) {
-      const witness = await getSignalCommitmentWitness(input.db, signal.signalId);
-
-      if (!witness) {
-        proofStatus = "failed";
-      } else {
-        try {
-          const proof = await proveAndSubmitReveal({
-            config: input.config,
-            signal,
-            witness,
-          });
-
-          proofId = proof.proofId;
-          txHash = proof.txHash ?? undefined;
-          proofUrl = proof.proofUrl ?? undefined;
-          proofStatus = "verified";
-        } catch {
-          proofStatus = "failed";
-        }
-      }
-    }
-
     const result = toRevealPackage({
       signal,
       finalDirection,
       resolvedAt: input.now.toISOString(),
-      proofId,
-      txHash,
-      proofUrl,
-      proofStatus,
+      proofStatus: "revealed",
     });
 
     await persistReveal(input.db, result);
@@ -452,6 +547,92 @@ export async function revealDueSignalsWorkflow(input: {
     syncedMarkets: markets.length,
     results,
     skipped,
+  };
+}
+
+export async function retryPendingSignalProofsWorkflow(
+  input: {
+    db: Queryable;
+    config: RuntimeConfig;
+  } & RetryPendingSignalProofsWorkflowDependencies,
+) {
+  const loadSignals = input.listSignalsNeedingProof ?? listSignalsNeedingProof;
+  const loadSignal = input.getSignalById ?? getSignalById;
+  const loadWitness = input.getSignalCommitmentWitness ?? getDbSignalCommitmentWitness;
+  const loadRevealRecord = input.getSignalRevealRecord ?? getDbSignalRevealRecord;
+  const persistProofResult = input.applyProofResult ?? applyDbSignalProofResult;
+  const submitProof = input.proveAndSubmitSignalReveal ?? proveAndSubmitSignalReveal;
+
+  if (!input.config.zk.rpcUrl || !input.config.zk.seedPhrase) {
+    return { checked: 0, verified: 0, failed: 0 };
+  }
+
+  const signals = await loadSignals(input.db);
+  const pendingSignals = signals.slice(0, PENDING_PROOF_BATCH_SIZE);
+  let verified = 0;
+  let failed = 0;
+
+  for (const candidate of pendingSignals) {
+    const signal = await loadSignal(input.db, candidate.signalId);
+
+    if (!signal) {
+      continue;
+    }
+
+    if (signal.commitmentHashMode !== "poseidon2-field-v1") {
+      await persistProofResult(input.db, {
+        signalId: signal.signalId,
+        proofStatus: "failed",
+      });
+      failed += 1;
+      continue;
+    }
+
+    const revealRecord = await loadRevealRecord(input.db, signal.signalId);
+
+    if (!revealRecord) {
+      continue;
+    }
+
+    const witness = await loadWitness(input.db, signal.signalId);
+
+    if (!witness) {
+      await persistProofResult(input.db, {
+        signalId: signal.signalId,
+        proofStatus: "failed",
+      });
+      failed += 1;
+      continue;
+    }
+
+    try {
+      const proof = await submitProof({
+        config: input.config,
+        signal,
+        witness,
+      });
+
+      await persistProofResult(input.db, {
+        signalId: signal.signalId,
+        proofId: proof.proofId,
+        txHash: proof.txHash,
+        proofUrl: proof.proofUrl,
+        proofStatus: "verified",
+      });
+      verified += 1;
+    } catch {
+      await persistProofResult(input.db, {
+        signalId: signal.signalId,
+        proofStatus: "failed",
+      });
+      failed += 1;
+    }
+  }
+
+  return {
+    checked: pendingSignals.length,
+    verified,
+    failed,
   };
 }
 
@@ -530,9 +711,11 @@ export async function runSignalLifecycleTick(input: {
   baseUrl: string;
 } & RunSignalLifecycleTickDependencies) {
   const syncWorkflow = input.syncSupportedMarketsWorkflow ?? syncSupportedMarketsWorkflow;
+  const syncBinanceWorkflow = input.syncBinanceCandlesWorkflow ?? syncBinanceCandlesWorkflow;
   const runWorkflow = input.runStoredMarketsWorkflow ?? runStoredMarketsWorkflow;
   const retryAnchorWorkflow = input.retryPendingAnchorsWorkflow ?? retryPendingAnchorsWorkflow;
   const revealWorkflow = input.revealDueSignalsWorkflow ?? revealDueSignalsWorkflow;
+  const retryProofWorkflow = input.retryPendingSignalProofsWorkflow ?? retryPendingSignalProofsWorkflow;
 
   const sync = await syncWorkflow({
     db: input.db,
@@ -540,6 +723,14 @@ export async function runSignalLifecycleTick(input: {
     fetchSupportedMarkets: input.fetchSupportedMarkets,
     upsertMarketSnapshots: input.upsertMarketSnapshots,
     findExistingSignalIdForMarket: input.findExistingSignalIdForMarket,
+  });
+
+  const binance = await syncBinanceWorkflow({
+    db: input.db,
+    config: input.config,
+    now: input.now,
+    fetchBinanceKlines: input.fetchBinanceKlines,
+    upsertBinanceCandles: input.upsertBinanceCandles,
   });
 
   const run = await runWorkflow({
@@ -554,21 +745,14 @@ export async function runSignalLifecycleTick(input: {
     anchorSignalCommitment: input.anchorSignalCommitment,
   });
 
-  await retryAnchorWorkflow({
-    db: input.db,
-    config: input.config,
-    listSignalsNeedingAnchor: input.listSignalsNeedingAnchor,
-    getSignalCommitmentWitness: input.getSignalCommitmentWitness,
-    persistSignalAnchor: input.persistSignalAnchor,
-    anchorSignalCommitment: input.anchorSignalCommitment,
-  });
-
   const reveal = await revealWorkflow({
     db: input.db,
     config: input.config,
     now: input.now,
     baseUrl: input.baseUrl,
     fetchSupportedMarkets: input.fetchSupportedMarkets,
+    fetchBinanceKlines: input.fetchBinanceKlines,
+    listStoredBinanceCandles: input.listStoredBinanceCandles,
     listDueSignals: input.listDueSignals,
     upsertMarketSnapshots: input.upsertMarketSnapshots,
     findExistingSignalIdForMarket: input.findExistingSignalIdForMarket,
@@ -578,9 +762,43 @@ export async function runSignalLifecycleTick(input: {
     proveAndSubmitSignalReveal: input.proveAndSubmitSignalReveal,
   });
 
+  const proof = await retryProofWorkflow({
+    db: input.db,
+    config: input.config,
+    listSignalsNeedingProof: input.listSignalsNeedingProof,
+    getSignalById: input.getSignalById,
+    getSignalCommitmentWitness: input.getSignalCommitmentWitness,
+    getSignalRevealRecord: input.getSignalRevealRecord,
+    applyProofResult: input.applyProofResult,
+    proveAndSubmitSignalReveal: input.proveAndSubmitSignalReveal,
+  });
+
   return {
     sync,
+    binance,
     run,
     reveal,
+    proof,
+  };
+}
+
+export async function runAnchorRetryTick(input: {
+  db: Queryable;
+  config: RuntimeConfig;
+  now: Date;
+} & RetryPendingAnchorsWorkflowDependencies) {
+  const retryAnchorWorkflow = input.retryPendingAnchorsWorkflow ?? retryPendingAnchorsWorkflow;
+  const anchor = await retryAnchorWorkflow({
+    db: input.db,
+    config: input.config,
+    now: input.now,
+    listSignalsNeedingAnchor: input.listSignalsNeedingAnchor,
+    getSignalCommitmentWitness: input.getSignalCommitmentWitness,
+    persistSignalAnchor: input.persistSignalAnchor,
+    anchorSignalCommitment: input.anchorSignalCommitment,
+  });
+
+  return {
+    anchor,
   };
 }
