@@ -1,3 +1,5 @@
+import type { Pool } from "pg";
+
 import { createHash, randomUUID } from "node:crypto";
 
 import { getAgentBySlug } from "@/server/agents";
@@ -8,6 +10,7 @@ import { computePoseidonCommitment } from "@/server/zk/noir";
 import type { MarketSnapshot, AgentSlug, RuntimeConfig } from "@/server/types";
 
 export interface RunSignalAgentInput {
+  db?: Pick<Pool, "query">;
   market: MarketSnapshot;
   config: RuntimeConfig;
   now: Date;
@@ -51,6 +54,7 @@ export async function runSignalAgent(input: RunSignalAgentInput): Promise<Signal
     now: input.now,
     market: input.market,
     config: input.config,
+    db: input.db,
   };
 
   if (!(await agent.shouldRun(context))) {
