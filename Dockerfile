@@ -1,6 +1,6 @@
 FROM ghcr.io/foundry-rs/foundry:stable AS foundry
 
-FROM node:22-bookworm-slim
+FROM node:22-trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.nargo/bin:/usr/local/bin:${PATH}"
