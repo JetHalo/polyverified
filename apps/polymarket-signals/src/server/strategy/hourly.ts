@@ -62,6 +62,7 @@ export interface HourlyStrategyDecision {
 export interface EvaluateHourlyStrategyInput {
   asset: string;
   backgroundCandles: StrategyCandle[];
+  backgroundDecisionCandles?: StrategyCandle[];
   triggerCandles: StrategyCandle[];
   minutesSinceOpen: number;
   priceToBeat?: number | null;
@@ -153,8 +154,9 @@ function computeConfidence(input: {
 
 export function evaluateHourlyStrategy(input: EvaluateHourlyStrategyInput): HourlyStrategyDecision {
   const minBackgroundCandles = input.minBackgroundCandles ?? 24;
+  const decisionCandles = input.backgroundDecisionCandles ?? input.backgroundCandles;
 
-  if (input.backgroundCandles.length < minBackgroundCandles) {
+  if (decisionCandles.length < minBackgroundCandles) {
     throw new Error(`Not enough background candles to evaluate ${input.asset} hourly strategy`);
   }
 
@@ -174,14 +176,14 @@ export function evaluateHourlyStrategy(input: EvaluateHourlyStrategyInput): Hour
   const atrSeries = calculateAtr(input.backgroundCandles, 14);
   const qqe = calculateQqeState(backgroundCloses);
   const backgroundIndex = input.backgroundCandles.length - 1;
-  const backgroundLatest = input.backgroundCandles[backgroundIndex]!;
+  const backgroundLatest = decisionCandles.at(-1) ?? input.backgroundCandles[backgroundIndex]!;
   const backgroundClose = backgroundLatest.close;
   const ema20 = ema20Series[backgroundIndex] ?? backgroundClose;
   const ema50 = ema50Series[backgroundIndex] ?? backgroundClose;
   const ema20Slope = ema20 - (ema20Series[Math.max(0, backgroundIndex - 3)] ?? ema20);
   const atr = atrSeries[backgroundIndex] ?? 0;
   const atrPercent = backgroundClose === 0 ? 0 : atr / backgroundClose;
-  const donchian = calculateDonchian(input.backgroundCandles, 20);
+  const donchian = calculateDonchian(decisionCandles, 20);
   const donchianWidth = Math.max(donchian.upper - donchian.lower, 0.000001);
   const donchianPosition = clamp((backgroundClose - donchian.lower) / donchianWidth, 0, 1);
   const bullishRegime = ema20 > ema50 && ema20Slope > 0;

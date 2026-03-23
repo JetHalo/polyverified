@@ -1,6 +1,7 @@
 import type { AgentRunContext } from "@/server/agents/types";
 import { getMarketCycleStart, getMinutesSinceCycleWindowStart } from "@/server/agents/shared";
 import { fetchBinanceKlines } from "@/server/binance/client";
+import { listStoredBinanceCandles } from "@/server/db/repository";
 import { reviewHourlyStrategyWithDeepSeek, type DeepSeekReviewResult } from "@/server/strategy/deepseek";
 import { evaluateHourlyStrategy, type HourlyStrategyDecision } from "@/server/strategy/hourly";
 import type { StrategyCandle } from "@/server/strategy/indicators";
@@ -17,6 +18,11 @@ export interface HourlyAgentFeatures {
   shouldSignal: boolean;
   explanation: string;
   reasonCodes: string[];
+}
+
+interface HourlyAgentFeatureDependencies {
+  fetchBinanceKlines?: typeof fetchBinanceKlines;
+  loadStoredBinanceCandles?: typeof listStoredBinanceCandles;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -56,25 +62,54 @@ function resolvePriceToBeat(
 export async function buildHourlyAgentFeatures(
   input: AgentRunContext,
   options: { asset: "BTC" | "ETH"; symbol: "BTCUSDT" | "ETHUSDT" },
+  dependencies: HourlyAgentFeatureDependencies = {},
 ): Promise<HourlyAgentFeatures> {
+  const cycleStartMs = getMarketCycleStart(input.market.marketType, input.market.opensAt, input.market.resolvesAt).getTime();
+  const fetchBinanceKlinesImpl = dependencies.fetchBinanceKlines ?? fetchBinanceKlines;
+  const loadStoredBinanceCandlesImpl = dependencies.loadStoredBinanceCandles ?? listStoredBinanceCandles;
+  const backgroundWindowStart = new Date(
+    cycleStartMs - (input.config.strategy.binance.backgroundKlineLimit * 5 * 60 * 1000),
+  );
+  const triggerWindowEnd = new Date(
+    cycleStartMs + (input.config.strategy.binance.triggerKlineLimit * 60 * 1000),
+  );
+  const loadSeries = async (interval: "5m" | "1m", limit: number, from: Date, to: Date) => {
+    if (input.db) {
+      const stored = await loadStoredBinanceCandlesImpl(input.db, {
+        symbol: options.symbol,
+        interval,
+        from,
+        to,
+      });
+
+      if (stored.length > 0) {
+        return stored;
+      }
+    }
+
+    return fetchBinanceKlinesImpl({
+      baseUrl: input.config.strategy.binance.baseUrl,
+      symbol: options.symbol,
+      interval,
+      limit,
+      now: input.now,
+    });
+  };
   const [backgroundSeries, triggerSeries] = await Promise.all([
-    fetchBinanceKlines({
-      baseUrl: input.config.strategy.binance.baseUrl,
-      symbol: options.symbol,
-      interval: input.config.strategy.binance.backgroundInterval,
-      limit: input.config.strategy.binance.backgroundKlineLimit,
-      now: input.now,
-    }),
-    fetchBinanceKlines({
-      baseUrl: input.config.strategy.binance.baseUrl,
-      symbol: options.symbol,
-      interval: input.config.strategy.binance.triggerInterval,
-      limit: input.config.strategy.binance.triggerKlineLimit,
-      now: input.now,
-    }),
+    loadSeries(
+      input.config.strategy.binance.backgroundInterval,
+      input.config.strategy.binance.backgroundKlineLimit,
+      backgroundWindowStart,
+      input.now,
+    ),
+    loadSeries(
+      input.config.strategy.binance.triggerInterval,
+      input.config.strategy.binance.triggerKlineLimit,
+      new Date(cycleStartMs),
+      triggerWindowEnd,
+    ),
   ]);
 
-  const cycleStartMs = getMarketCycleStart(input.market.marketType, input.market.opensAt, input.market.resolvesAt).getTime();
   const backgroundDecisionWindowStartMs = cycleStartMs - (2 * 60 * 60 * 1000);
   const preOpenCandles = backgroundSeries.filter((candle) => candle.closeTime <= cycleStartMs);
   const preOpenDecisionCandles = preOpenCandles.filter((candle) => candle.openTime >= backgroundDecisionWindowStartMs);
@@ -92,6 +127,7 @@ export async function buildHourlyAgentFeatures(
   const analysis = evaluateHourlyStrategy({
     asset: options.asset,
     backgroundCandles: preOpenCandles,
+    backgroundDecisionCandles: preOpenDecisionCandles,
     triggerCandles,
     minutesSinceOpen,
     priceToBeat,
