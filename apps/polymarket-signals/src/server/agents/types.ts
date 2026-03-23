@@ -1,9 +1,12 @@
+import type { Pool } from "pg";
+
 import type { Direction, MarketSnapshot, RuntimeConfig, AgentSlug, MarketType } from "@/server/types";
 
 export interface AgentRunContext {
   now: Date;
   market: MarketSnapshot;
   config: RuntimeConfig;
+  db?: Pick<Pool, "query">;
 }
 
 export interface AgentPredictionInput {
