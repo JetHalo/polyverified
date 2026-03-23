@@ -22,7 +22,7 @@ function confidenceToBucket(value: number): DemoSignal["confidence"] {
 }
 
 function normalizeProofState(value: string | null | undefined): DemoSignal["proofState"] {
-  if (value === "verified" || value === "revealed") {
+  if (value === "verified" || value === "revealed" || value === "failed") {
     return value;
   }
   return "committed";

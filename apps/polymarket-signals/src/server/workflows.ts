@@ -92,6 +92,10 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function toCommitmentPayload(signal: SignalRecord, witness: NonNullable<Awaited<ReturnType<typeof getDbSignalCommitmentWitness>>>): CommitmentPayload {
   return {
     commitmentVersion: witness.commitmentVersion,
@@ -596,6 +600,10 @@ export async function retryPendingSignalProofsWorkflow(
     }
 
     if (signal.commitmentHashMode !== "poseidon2-field-v1") {
+      console.error("[proof] unsupported commitment mode", {
+        signalId: signal.signalId,
+        commitmentHashMode: signal.commitmentHashMode,
+      });
       await persistProofResult(input.db, {
         signalId: signal.signalId,
         proofStatus: "failed",
@@ -613,6 +621,9 @@ export async function retryPendingSignalProofsWorkflow(
     const witness = await loadWitness(input.db, signal.signalId);
 
     if (!witness) {
+      console.error("[proof] missing commitment witness", {
+        signalId: signal.signalId,
+      });
       await persistProofResult(input.db, {
         signalId: signal.signalId,
         proofStatus: "failed",
@@ -636,7 +647,11 @@ export async function retryPendingSignalProofsWorkflow(
         proofStatus: "verified",
       });
       verified += 1;
-    } catch {
+    } catch (error) {
+      console.error("[proof] verification failed", {
+        signalId: signal.signalId,
+        error: toErrorMessage(error),
+      });
       await persistProofResult(input.db, {
         signalId: signal.signalId,
         proofStatus: "failed",

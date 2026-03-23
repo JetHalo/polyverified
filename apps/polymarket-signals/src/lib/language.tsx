@@ -112,8 +112,22 @@ export function directionLabel(direction: Direction, language: Language) {
 
 export function proofStateLabel(state: ProofState, language: Language) {
   return translate(language, {
-    en: state === "committed" ? "Committed" : state === "revealed" ? "Revealed" : "Verified",
-    zh: state === "committed" ? "已承诺" : state === "revealed" ? "已公开" : "已验证",
+    en:
+      state === "committed"
+        ? "Committed"
+        : state === "revealed"
+          ? "Revealed"
+          : state === "verified"
+            ? "Verified"
+            : "Failed",
+    zh:
+      state === "committed"
+        ? "已承诺"
+        : state === "revealed"
+          ? "已公开"
+          : state === "verified"
+            ? "已验证"
+            : "已失败",
   });
 }
 

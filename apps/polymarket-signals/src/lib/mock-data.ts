@@ -1,6 +1,6 @@
 export type Market = "BTC Hourly" | "ETH Hourly" | "Gold Daily" | "Silver Daily";
 export type Direction = "Up" | "Down";
-export type ProofState = "committed" | "revealed" | "verified";
+export type ProofState = "committed" | "revealed" | "verified" | "failed";
 
 export interface Signal {
   id: string;
