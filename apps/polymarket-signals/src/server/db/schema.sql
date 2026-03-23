@@ -35,6 +35,27 @@ create table if not exists market_observations (
 
 create index if not exists market_observations_market_idx on market_observations(market_id, observed_at);
 
+create table if not exists binance_candles (
+  symbol text not null,
+  interval text not null,
+  open_time timestamptz not null,
+  close_time timestamptz not null,
+  open numeric(18,8) not null,
+  high numeric(18,8) not null,
+  low numeric(18,8) not null,
+  close numeric(18,8) not null,
+  volume numeric(24,8) not null,
+  quote_volume numeric(24,8) not null,
+  trades integer not null,
+  taker_buy_base_volume numeric(24,8) not null,
+  taker_buy_quote_volume numeric(24,8) not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (symbol, interval, open_time)
+);
+
+create index if not exists binance_candles_lookup_idx on binance_candles(symbol, interval, open_time);
+
 create table if not exists signals (
   signal_id text primary key,
   agent_slug text not null references agents(slug),
